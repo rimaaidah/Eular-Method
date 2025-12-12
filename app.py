@@ -6,7 +6,10 @@ import matplotlib.pyplot as plt
 # ---------------------------------------------------------
 # Konfigurasi halaman
 # ---------------------------------------------------------
-streamlit.set_page_config(page_title="Euler COVID Jabar", layout="wide")
+streamlit.set_page_config(page_title="SIR Euler COVID Jabar", layout="wide")
+
+# Populasi total (kira-kira) Jawa Barat
+N = 50_000_000  # bisa kamu tulis juga di laporan
 
 
 # ---------------------------------------------------------
@@ -36,79 +39,80 @@ def load_data(csv_path: str) -> pd.DataFrame:
     return df_group
 
 
-def f_exp(t: float, I: float, params: dict) -> float:
+# ---------------------------------------------------------
+# 2. Model SIR & Metode Euler 2D
+# ---------------------------------------------------------
+def f_sir(t, y, params):
     """
-    Model eksponensial: dI/dt = r * I
+    Model SIR sederhana dalam bentuk proporsi:
 
-    Parameters
-    ----------
-    t : float
-        Waktu (hari). Tidak dipakai eksplisit di model ini, tapi tetap disertakan.
-    I : float
-        Nilai kasus aktif pada waktu t.
-    params : dict
-        Kamus parameter yang minimal berisi 'r'.
+        ds/dt = -beta * s * i
+        di/dt =  beta * s * i - gamma * i
 
-    Returns
-    -------
-    float
-        Nilai turunan dI/dt.
+    y = [s, i], params = {"beta": ..., "gamma": ...}
     """
-    r = params["r"]
-    return r * I
+    s, i = y
+    beta = params["beta"]
+    gamma = params["gamma"]
+
+    dsdt = -beta * s * i
+    didt = beta * s * i - gamma * i
+    return np.array([dsdt, didt])
 
 
-def euler_solve(f, t0, y0, h, n_steps, params):
+def euler_solve_sir(f, t0, y0, h, n_steps, params):
     """
-    Menyelesaikan ODE 1 dimensi dengan Metode Euler.
+    Metode Euler untuk sistem SIR 2 variabel (s dan i).
 
     f       : fungsi ODE f(t, y, params)
     t0      : waktu awal
-    y0      : nilai awal
-    h       : step size (langkah waktu)
+    y0      : array awal [s0, i0]
+    h       : step size (hari per langkah)
     n_steps : jumlah langkah Euler
-    params  : parameter model (dict)
+    params  : dict parameter (beta, gamma)
     """
     t_values = np.zeros(n_steps + 1)
-    y_values = np.zeros(n_steps + 1)
+    y_values = np.zeros((n_steps + 1, len(y0)))
 
     t_values[0] = t0
-    y_values[0] = y0
+    y_values[0, :] = y0
 
     for n in range(n_steps):
-        # Rumus Euler: y_{n+1} = y_n + h * f(t_n, y_n)
-        y_values[n + 1] = y_values[n] + h * f(t_values[n], y_values[n], params)
-        t_values[n + 1] = t_values[n] + h
+        y_values[n+1, :] = y_values[n, :] + h * f(t_values[n], y_values[n, :], params)
+        t_values[n+1] = t_values[n] + h
 
     return t_values, y_values
 
 
 # ---------------------------------------------------------
-# 2. MAIN APP
+# 3. MAIN APP
 # ---------------------------------------------------------
 
-streamlit.title("Metode Euler untuk Kasus Aktif COVID-19 Jawa Barat")
+streamlit.title("Model SIR + Metode Euler untuk Kasus Aktif COVID-19 Jawa Barat")
 
 streamlit.write(
-    """
-Aplikasi ini merupakan implementasi **Metode Euler** untuk memodelkan
-**kasus aktif COVID-19 di Jawa Barat** menggunakan data dari Open Data Jabar
-(*perkembangan harian kasus terkonfirmasi positif COVID-19 berdasarkan kabupaten/kota*).
+    r"""
+Aplikasi ini menggunakan data **kasus aktif COVID-19** dari Open Data Jawa Barat,
+kemudian memodelkan dinamika penularannya dengan **model SIR sederhana**:
 
-Data diolah menjadi **total kasus aktif per hari untuk seluruh Jawa Barat**, lalu
-dimodelkan dengan persamaan diferensial sederhana:
-
-\\[
-\\frac{dI}{dt} = r I
-\\]
+\[
+\begin{aligned}
+\frac{dS}{dt} &= -\beta S I, \\
+\frac{dI}{dt} &= \beta S I - \gamma I.
+\end{aligned}
+\]
 
 dengan:
-- \\( I(t) \\): total kasus aktif pada hari ke-\\( t \\),
-- \\( r \\): laju pertumbuhan kasus aktif per hari.
+- \(S(t)\): jumlah penduduk **rentan** (susceptible),
+- \(I(t)\): jumlah penduduk **terinfeksi / kasus aktif**,
+- \(\beta\): laju penularan,
+- \(\gamma\): laju kesembuhan / keluar dari status infeksi.
+
+Pada implementasi ini, persamaan diselesaikan secara numerik menggunakan **Metode Euler**.
 """
 )
 
-# 2.1 Load data
+# 3.1 Load data
 csv_path = "covid_jabar_perkembangan_harian.csv"
 df_group = load_data(csv_path)
 
@@ -116,30 +120,48 @@ streamlit.subheader("Cuplikan Data COVID-19 (Total Kasus Aktif per Tanggal)")
 streamlit.dataframe(df_group.head())
 
 # ---------------------------------------------------------
-# 3. Sidebar: parameter input (sesuai soal TA)
+# 4. Sidebar: parameter input
 # ---------------------------------------------------------
 
-streamlit.sidebar.header("Pengaturan Simulasi (Metode Euler)")
+streamlit.sidebar.header("Pengaturan Simulasi Model SIR")
 
-# Ambil deret nilai kasus aktif
+# Data I(t) asli (jumlah orang)
 I_data = df_group["konfirmasi_aktif"].values.astype(float)
 tanggal_all = df_group["tanggal"].values
 
-# Estimasi r awal secara sederhana dari rata-rata log-growth
-mask_pos = I_data > 0
-r_default = 0.1  # fallback
+# Inisialisasi i0 dan s0 dalam proporsi
+I0_count = I_data[0]
+i0 = I0_count / N
+s0 = 1.0 - i0  # asumsi awal: hampir semua masih rentan, R0 ≈ 0
 
+# Estimasi r awal dari data (untuk membantu set beta default)
+mask_pos = I_data > 0
+r_est = 0.1
 if mask_pos.sum() >= 2:
     I_pos = I_data[mask_pos]
     growth_logs = np.log(I_pos[1:] / I_pos[:-1])
-    r_default = float(growth_logs.mean())
+    r_est = float(growth_logs.mean())
 
-r = streamlit.sidebar.number_input(
-    "Laju pertumbuhan r (per hari)",
-    value=round(r_default, 4),
+# Asumsi awal gamma (misal rata-rata lama infeksi 10 hari -> gamma ≈ 0.1)
+gamma_default = 0.1
+
+# Dari pendekatan linear: r ≈ beta * S0 - gamma  => beta ≈ (r + gamma) / S0
+beta_default = (r_est + gamma_default) / s0 if s0 > 0 else 0.2
+
+beta = streamlit.sidebar.number_input(
+    "β (laju penularan)",
+    value=round(beta_default, 4),
     step=0.01,
     format="%.4f",
-    help="Semakin besar r, semakin cepat pertumbuhan kasus aktif (model eksponensial)."
+    help="Semakin besar β, penularan antar individu rentan dan terinfeksi semakin cepat."
+)
+
+gamma = streamlit.sidebar.number_input(
+    "γ (laju kesembuhan)",
+    value=round(gamma_default, 4),
+    step=0.01,
+    format="%.4f",
+    help="Sekitar γ ≈ 1 / (lama rata-rata hari seseorang terinfeksi)."
 )
 
 h = streamlit.sidebar.slider(
@@ -148,7 +170,7 @@ h = streamlit.sidebar.slider(
     max_value=2.0,
     value=1.0,
     step=0.1,
-    help="Semakin kecil h, simulasi lebih halus tetapi langkah yang dibutuhkan lebih banyak."
+    help="Semakin kecil h, simulasi lebih halus tetapi butuh lebih banyak langkah."
 )
 
 max_days = min(200, len(df_group))
@@ -162,66 +184,65 @@ duration_days = streamlit.sidebar.slider(
 )
 
 # ---------------------------------------------------------
-# 4. Menjalankan simulasi Euler
+# 5. Menjalankan simulasi SIR dengan Euler
 # ---------------------------------------------------------
 
-# Siapkan data untuk simulasi
-I_data_used = I_data.copy()
-tanggal_used = tanggal_all
-
-# Hitung jumlah langkah Euler dari durasi dan h
+# Hitung jumlah langkah Euler
 n_steps = int(duration_days / h)
 if n_steps < 1:
     streamlit.error("Kombinasi durasi dan h membuat jumlah langkah terlalu sedikit.")
     streamlit.stop()
 
 # Jangan melebihi panjang data
-n_steps = min(n_steps, len(I_data_used) - 1)
+n_steps = min(n_steps, len(I_data) - 1)
 
-# Kondisi awal model diambil dari data hari pertama
-I0 = float(I_data_used[0])
-params = {"r": r}
-t0 = 0.0
+# Kondisi awal (dalam proporsi)
+y0 = np.array([s0, i0])
+params = {"beta": beta, "gamma": gamma}
 
-t_sim, I_sim = euler_solve(f_exp, t0, I0, h, n_steps, params)
+t_sim, y_sim = euler_solve_sir(f_sir, t0=0.0, y0=y0, h=h, n_steps=n_steps, params=params)
 
-# Sesuaikan panjang data & tanggal dengan simulasi
-I_data_plot = I_data_used[: n_steps + 1]
-tanggal_plot = tanggal_used[: n_steps + 1]
+s_sim = y_sim[:, 0]           # proporsi S(t)
+i_sim = y_sim[:, 1]           # proporsi I(t)
+I_sim_count = i_sim * N       # kembali ke "jumlah orang"
 
-# Hitung error antara data dan model
-diff = I_sim - I_data_plot
+# Sesuaikan data asli dengan panjang simulasi
+I_data_plot = I_data[: n_steps + 1]
+tanggal_plot = tanggal_all[: n_steps + 1]
+
+# Hitung error
+diff = I_sim_count - I_data_plot
 mse = float(np.mean(diff**2))
 mae = float(np.mean(np.abs(diff)))
 
 # ---------------------------------------------------------
-# 5. Tampilkan hasil (grafik + metrik error)
+# 6. Tampilkan hasil
 # ---------------------------------------------------------
 
-streamlit.subheader("Hasil Simulasi vs Data Asli")
+streamlit.subheader("Hasil Simulasi SIR vs Data Kasus Aktif")
 
-# Plot dengan matplotlib
 fig, ax = plt.subplots(figsize=(10, 5))
 ax.plot(tanggal_plot, I_data_plot, label="Data asli (kasus aktif)")
-ax.plot(tanggal_plot, I_sim, "--", label="Simulasi Euler (dI/dt = rI)")
+ax.plot(tanggal_plot, I_sim_count, "--", label="Simulasi SIR (Metode Euler)")
 ax.set_xlabel("Tanggal")
-ax.set_ylabel("Kasus aktif (total Jawa Barat)")
-ax.set_title("Perbandingan Data vs Simulasi Euler")
+ax.set_ylabel("Kasus aktif (jumlah orang)")
+ax.set_title("Perbandingan Data vs Simulasi Model SIR (Euler)")
 ax.legend()
 plt.xticks(rotation=45)
 plt.tight_layout()
 
 streamlit.pyplot(fig)
 
-# Tampilkan parameter & error
 streamlit.markdown(
     f"""
 ### Ringkasan Parameter & Error
 
 **Parameter simulasi saat ini:**
-- Laju pertumbuhan \\( r \\) = `{r:.4f}` per hari  
+- β (laju penularan) = `{beta:.4f}`  
+- γ (laju kesembuhan) = `{gamma:.4f}`  
 - Step size \\( h \\) = `{h:.2f}` hari per langkah  
 - Jumlah langkah Euler = `{n_steps}`  
+- Populasi total diasumsikan \\( N = {N:,} \\) orang  
 
 **Error antara model dan data (periode simulasi):**
 - Mean Squared Error (MSE) = `{mse:.2f}`  
@@ -230,6 +251,6 @@ streamlit.markdown(
 )
 
 streamlit.info(
-    "Coba ubah nilai r dan h. "
-    "Perhatikan bagaimana bentuk kurva simulasi dan nilai error (MSE/MAE) berubah. "
+    "Coba ubah nilai β dan γ di sidebar, lalu amati bagaimana bentuk kurva I(t) dan nilai error (MSE/MAE) berubah. "
+    "Pengaturan parameter yang membuat kurva simulasi paling mendekati data dapat dianggap sebagai model yang paling cocok untuk periode tersebut."
 )
